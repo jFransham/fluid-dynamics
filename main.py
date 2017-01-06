@@ -3,10 +3,11 @@ import math
 import matplotlib.pyplot as plot
 import numpy as np
 
+from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
 from itertools import chain
 
 # Corresponds to dx and dy for finite-difference approximation
-space_granularity = 0.001
+space_granularity = 0.01
 time_granularity  = 0.01
 
 # Kinematic viscosity of water at room temperature
@@ -215,7 +216,6 @@ def mk_iterate_pressure(velocity):
 
 
 def apply_boundaries(scale, mat):
-    # Keep It Immutable, Stupid
     new_mat = np.copy(mat)
     new_mat[:,  0] = scale * mat[:,  1]
     new_mat[:, -1] = scale * mat[:, -2]
@@ -229,50 +229,98 @@ def apply_boundaries(scale, mat):
 
     return new_mat
 
+
+def scale_img(img, size):
+    w, h = size
+    ih, iw, _ = img.shape
+    scale = min(float(w)/iw, float(h)/ih)
+    ow, oh = (int(iw*scale), int(ih*scale))
+
+    mat = cv2.getRotationMatrix2D(
+        (0, 0),
+        0,
+        scale,
+    )
+
+    return cv2.warpAffine(
+        img,
+        mat,
+        (w, h),
+        cv2.INTER_CUBIC,
+    )
+
+
 # Velocity grid
-vel_grid = np.ones(vel_shape)
-vel_grid[:, :, 0] = 0
+vel_grid = np.zeros(vel_shape)
 
 # Gravity grid for a single time step
-gra_grid = np.ones(vel_shape) * time_granularity
+gra_grid = (
+    np.ones(vel_shape) *
+    time_granularity *
+    (space_granularity * space_granularity)
+)
 gra_grid[:, :, 1] = 0
+gra_grid *= 9.8
+
+dye_grid = scale_img(
+    cv2.imread('../python-glitch/michaeljfox.png'),
+    grid_shape
+)
 
 # Pressure grid
-pre_grid = np.zeros(pre_shape)
+pre_grid = np.ones(pre_shape)
 
 last_vel = vel_grid
+last_dye = dye_grid
 
-for _ in range(1000):
+for i in range(1000):
     def print_speed(vel):
         vx    = vel[:, :, 0]
         vy    = vel[:, :, 1]
-        speed = vx * vx + vy * vy
+        speed = np.sqrt(vx * vx + vy * vy)
 
-        print(np.sum(speed))
+        print(np.sum(speed) / i)
 
-    tmp_grid = advect(
+    if i%2 == 0:
+        print_speed(vel_grid)
+
+    tmp_dye = advect(
         vel_grid,
-        last_vel,
-        vel_grid
+        last_dye,
+        dye_grid
     )
-    print_speed(tmp_grid)
+
+    last_dye = dye_grid
+    dye_grid = tmp_dye
+
+    tmp_grid = diffuse(
+        advect(
+            vel_grid,
+            last_vel,
+            vel_grid
+        )
+    )
 
     tmp_grid = diffuse(tmp_grid)
-    print_speed(tmp_grid)
+    tmp_grid += gra_grid
 
     tmp_prsr = iterate(
         mk_iterate_pressure(tmp_grid),
         pre_grid
     )
 
-    pre_grad = gradient(tmp_prsr)
-
-    tmp_grid -= pre_grad
+    tmp_grid -= gradient(tmp_prsr)
 
     last_vel = vel_grid
-    vel_grid = apply_boundaries(-1., tmp_grid)
 
-    pre_grid = apply_boundaries(1., tmp_prsr)
+    vel_grid = tmp_grid
+    pre_grid = tmp_prsr
 
-    cv2.imshow("Show", np.concatenate((pre_grid, vel_grid), axis=2))
-    cv2.waitKey(1)
+    vel_grid = apply_boundaries(-1., vel_grid)
+    pre_grid = apply_boundaries( 1., pre_grid)
+
+    plot.imshow(
+        dye_grid,
+        interpolation='nearest',
+    )
+    plot.show()
